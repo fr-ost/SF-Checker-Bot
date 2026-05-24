@@ -81,7 +81,22 @@ async def scrape_getmoni(username: str) -> dict:
 
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=35_000)
-            await page.wait_for_timeout(5500)
+
+            # Wait until the REAL score has loaded near the "Moni Score" label
+            # (avoids reading a "Level: 1. Stealth" placeholder before data loads)
+            try:
+                await page.wait_for_function(
+                    """() => {
+                        const t = document.body.innerText;
+                        const m = t.match(/Moni\\s*Score[\\s\\S]{0,80}?(\\d{2,})/i);
+                        return m && parseInt(m[1], 10) > 0;
+                    }""",
+                    timeout=18_000,
+                )
+            except Exception:
+                pass
+            # small settle so the level text updates from placeholder to real
+            await page.wait_for_timeout(2500)
 
             page_text = await page.inner_text("body")
             logger.debug("GetMoni text[:800]: %s", page_text[:800])
@@ -94,7 +109,7 @@ async def scrape_getmoni(username: str) -> dict:
                     if m and float(m.group(1)) >= 1:
                         result["score"] = int(float(m.group(1)))
                 if result["level"] is None:
-                    m = re.search(r'"level"\s*:\s*"?([^",}]+)"?', blob)
+                    m = re.search(r'"level(?:_?name)?"\s*:\s*"?([^",}]+)"?', blob)
                     if m:
                         result["level"] = m.group(1).strip().title()
                 if result["smarts"] is None:
@@ -106,20 +121,29 @@ async def scrape_getmoni(username: str) -> dict:
                     if m:
                         result["followers"] = int(m.group(1))
 
-            # ── 2. Level: "Level: 3. Developing" ──
+            # ── 2. Score + Level TOGETHER, anchored to the Moni Score block ──
+            #    Page reads: "Moni Score [?] Level: 3. Developing  995"
+            combo = re.search(
+                r"Moni\s*Score\D*?Level[:\s]+(\d+)\s*\.?\s*([A-Za-z]+)"
+                r"\D*?(\d{1,3}(?:[ ,]\d{3})*|\d+)",
+                page_text, re.IGNORECASE,
+            )
+            if combo:
+                if result["level"] is None:
+                    result["level"] = f"{combo.group(1)}. {combo.group(2)}"
+                if result["score"] is None:
+                    result["score"] = _clean_int(combo.group(3))
+
+            # Fallback level (only if combo failed): take the level nearest "Moni Score"
             if result["level"] is None:
-                lvl = re.search(r"Level[:\s]+(\d+)\s*\.?\s*([A-Za-z]+)", page_text)
+                lvl = re.search(
+                    r"Moni\s*Score[\s\S]{0,80}?Level[:\s]+(\d+)\s*\.?\s*([A-Za-z]+)",
+                    page_text, re.IGNORECASE,
+                )
                 if lvl:
                     result["level"] = f"{lvl.group(1)}. {lvl.group(2)}"
 
-            # ── 3. Score: number right after the Level label ──
-            if result["score"] is None:
-                m = re.search(
-                    r"Level[:\s]+\d+\s*\.?\s*[A-Za-z]+\s+(\d{1,3}(?:[ ,]\d{3})*|\d+)",
-                    page_text,
-                )
-                if m:
-                    result["score"] = _clean_int(m.group(1))
+            # Fallback score
             if result["score"] is None:
                 m = re.search(r"Moni\s*Score[^\d]*(\d{1,3}(?:[ ,]\d{3})*|\d+)",
                               page_text, re.IGNORECASE)
