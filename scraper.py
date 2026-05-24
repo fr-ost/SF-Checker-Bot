@@ -101,17 +101,15 @@ async def scrape_getmoni(username: str) -> dict:
             page_text = await page.inner_text("body")
             logger.debug("GetMoni text[:800]: %s", page_text[:800])
 
-            # ── 1. API JSON first ──
+            # ── 1. API JSON first (score / smarts / followers only) ──
+            #    Level is intentionally NOT taken from JSON — it was returning
+            #    the wrong tier. The visible badge (step 2) is authoritative.
             for payload in api_payloads:
                 blob = json.dumps(payload).lower()
                 if result["score"] is None:
                     m = re.search(r'"(?:moni_?score|smart_?score|score)"\s*:\s*(\d+(?:\.\d+)?)', blob)
                     if m and float(m.group(1)) >= 1:
                         result["score"] = int(float(m.group(1)))
-                if result["level"] is None:
-                    m = re.search(r'"level(?:_?name)?"\s*:\s*"?([^",}]+)"?', blob)
-                    if m:
-                        result["level"] = m.group(1).strip().title()
                 if result["smarts"] is None:
                     m = re.search(r'"(?:smarts?|smart_?followers?)"\s*:\s*(\d+)', blob)
                     if m:
@@ -121,29 +119,56 @@ async def scrape_getmoni(username: str) -> dict:
                     if m:
                         result["followers"] = int(m.group(1))
 
-            # ── 2. Score + Level TOGETHER, anchored to the Moni Score block ──
-            #    Page reads: "Moni Score [?] Level: 3. Developing  995"
-            combo = re.search(
-                r"Moni\s*Score\D*?Level[:\s]+(\d+)\s*\.?\s*([A-Za-z]+)"
-                r"\D*?(\d{1,3}(?:[ ,]\d{3})*|\d+)",
-                page_text, re.IGNORECASE,
-            )
-            if combo:
-                if result["level"] is None:
-                    result["level"] = f"{combo.group(1)}. {combo.group(2)}"
-                if result["score"] is None:
-                    result["score"] = _clean_int(combo.group(3))
+            # ── 2. LEVEL: grab the exact visible badge element ──
+            #    The badge's whole text is literally "Level: 3. Developing".
+            #    This avoids the (?) tooltip legend that lists "1. Stealth, 2..., 3...".
+            if result["level"] is None:
+                try:
+                    badge = await page.evaluate(
+                        """() => {
+                            const re = /^Level:\\s*(\\d+)\\s*\\.?\\s*([A-Za-z]+)$/;
+                            const nodes = Array.from(
+                                document.querySelectorAll('span,div,p,td,li,strong,b,small')
+                            );
+                            // pass 1: visible elements whose ENTIRE text is the badge
+                            for (const el of nodes) {
+                                const t = (el.textContent || '').trim();
+                                if (re.test(t) && el.offsetParent !== null) return t;
+                            }
+                            // pass 2: any element matching exactly (hidden ok)
+                            for (const el of nodes) {
+                                const t = (el.textContent || '').trim();
+                                if (re.test(t)) return t;
+                            }
+                            return null;
+                        }"""
+                    )
+                    if badge:
+                        m = re.search(r"Level:\s*(\d+)\s*\.?\s*([A-Za-z]+)", badge)
+                        if m:
+                            result["level"] = f"{m.group(1)}. {m.group(2)}"
+                except Exception:
+                    logger.exception("level DOM query failed")
 
-            # Fallback level (only if combo failed): take the level nearest "Moni Score"
+            # Fallback level: regex requiring the colon ("Level:"), nearest Moni Score.
+            # The colon is mandatory so the tooltip legend ("Level\n1. Stealth") can't match.
             if result["level"] is None:
                 lvl = re.search(
-                    r"Moni\s*Score[\s\S]{0,80}?Level[:\s]+(\d+)\s*\.?\s*([A-Za-z]+)",
+                    r"Moni\s*Score[\s\S]{0,120}?Level:\s*(\d+)\s*\.?\s*([A-Za-z]+)",
                     page_text, re.IGNORECASE,
                 )
                 if lvl:
                     result["level"] = f"{lvl.group(1)}. {lvl.group(2)}"
 
-            # Fallback score
+            # ── 3. SCORE: number right after the level badge, else after "Moni Score" ──
+            if result["score"] is None:
+                m = re.search(
+                    r"Moni\s*Score[\s\S]{0,120}?Level:\s*\d+\s*\.?\s*[A-Za-z]+\s+"
+                    r"(\d{1,3}(?:[ ,]\d{3})*|\d+)",
+                    page_text, re.IGNORECASE,
+                )
+                if m:
+                    result["score"] = _clean_int(m.group(1))
             if result["score"] is None:
                 m = re.search(r"Moni\s*Score[^\d]*(\d{1,3}(?:[ ,]\d{3})*|\d+)",
                               page_text, re.IGNORECASE)
