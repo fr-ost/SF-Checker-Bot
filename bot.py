@@ -1,5 +1,6 @@
 import os
 import re
+import html
 import logging
 from datetime import datetime
 
@@ -90,46 +91,51 @@ def build_message(username: str, data: dict, prev: dict | None) -> str:
     name = data.get("name")
     url = data.get("url")
 
+    link = f'<a href="{html.escape(url)}">View on GetMoni</a>'
+
     if data.get("error"):
         return (
-            f"📊 *@{username}*\n"
-            f"⚠️ Could not fetch right now: _{data['error']}_\n"
-            f"[Open on GetMoni]({url})"
+            f"📊 <b>@{html.escape(username)}</b>\n"
+            f"⚠️ Could not fetch right now: {html.escape(str(data['error']))}\n"
+            f"{link}"
         )
 
     if score is None and smarts is None and followers is None:
         return (
-            f"📊 *@{username}*\n"
+            f"📊 <b>@{html.escape(username)}</b>\n"
             f"⚠️ No data found for this profile.\n"
-            f"[Open on GetMoni]({url})"
+            f"{link}"
         )
 
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-    title = f"📊 *{name}* (@{username})" if name else f"📊 *@{username}*"
+    if name:
+        title = f"📊 <b>{html.escape(name)}</b> (@{html.escape(username)})"
+    else:
+        title = f"📊 <b>@{html.escape(username)}</b>"
 
     p_score = prev["score"] if prev else None
     p_smarts = prev["smarts"] if prev else None
     p_foll = prev["followers"] if prev else None
 
-    lines = [title, f"_{now}_", ""]
+    lines = [title, now, ""]
 
     if score is not None:
-        lines.append(f"🟣 *Moni Score:* `{score}`{fmt_change(score, p_score)}")
+        lines.append(f"🟣 <b>Moni Score:</b> {score}{fmt_change(score, p_score)}")
     if level:
-        lines.append(f"📈 *Level:* {level}")
+        lines.append(f"📈 <b>Level:</b> {html.escape(level)}")
     if smarts is not None:
-        lines.append(f"🧠 *Smart Followers:* `{smarts}`{fmt_change(smarts, p_smarts)}")
+        lines.append(f"🧠 <b>Smart Followers:</b> {smarts}{fmt_change(smarts, p_smarts)}")
     if followers is not None:
         lines.append(
-            f"👥 *Followers:* `{fmt_number(followers)}`{fmt_change(followers, p_foll, pretty=True)}"
+            f"👥 <b>Followers:</b> {fmt_number(followers)}{fmt_change(followers, p_foll, pretty=True)}"
         )
 
     lines.append("")
-    lines.append(f"[View on GetMoni]({url})")
+    lines.append(link)
 
     if prev is None:
         lines.append("")
-        lines.append("_First search — changes show next time._")
+        lines.append("<i>First search — changes show next time.</i>")
 
     return "\n".join(lines)
 
@@ -157,7 +163,7 @@ async def _process(update: Update, username: str):
     reply = build_message(username, data, prev)
     await update.message.reply_text(
         reply,
-        parse_mode=ParseMode.MARKDOWN,
+        parse_mode=ParseMode.HTML,
         disable_web_page_preview=True,
     )
 
@@ -166,14 +172,15 @@ async def _process(update: Update, username: str):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 *Moni Score Bot*\n\n"
+        "👋 <b>Moni Score Bot</b>\n\n"
         "Send a Twitter/X profile link and I'll reply with its "
-        "*Moni Score* and *Level* from GetMoni.\n\n"
+        "<b>Moni Score</b>, <b>Level</b>, <b>Smart Followers</b> and "
+        "<b>Followers</b> from GetMoni.\n\n"
         "Works in groups too — just drop a profile link and I'll auto-reply.\n\n"
         "Examples:\n"
-        "`https://x.com/0x_nation`\n"
-        "`@0x_nation`",
-        parse_mode=ParseMode.MARKDOWN,
+        "https://x.com/0x_nation\n"
+        "@0x_nation",
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -183,8 +190,7 @@ async def handle_private(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = extract_username(update.message.text, is_group=False)
     if not username:
         await update.message.reply_text(
-            "❌ Send a valid X/Twitter link or `@username`.",
-            parse_mode=ParseMode.MARKDOWN,
+            "❌ Send a valid X/Twitter link or @username.",
         )
         return
     await _process(update, username)
