@@ -182,20 +182,35 @@ async def scrape_sorsa(context, username: str) -> dict:
             )
         except Exception:
             pass
-        await page.wait_for_timeout(3000)
+
+        # The "Top followers by score tiers" count loads late and sits lower on
+        # the page — scroll down to trigger it, then wait for the number to render.
+        try:
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        except Exception:
+            pass
+        try:
+            await page.wait_for_function(
+                """() => {
+                    const t = document.body.innerText;
+                    const m = t.match(/score tiers[\\s\\S]{0,50}?(\\d{2,6})/i);
+                    return m && parseInt(m[1], 10) > 0;
+                }""",
+                timeout=20_000,
+            )
+        except Exception:
+            pass
+        await page.wait_for_timeout(2500)
         text = await page.inner_text("body")
 
-        # JSON first
+        # JSON first (score only — the "Top followers by score tiers" count
+        # is taken from the visible number below, which is the 326 you marked)
         for payload in api:
             blob = json.dumps(payload).lower()
             if result["score"] is None:
                 m = re.search(r'"score"\s*:\s*(\d+(?:\.\d+)?)', blob)
                 if m and float(m.group(1)) >= 1:
                     result["score"] = int(float(m.group(1)))
-            if result["smarts"] is None:
-                m = re.search(r'"(?:smart_?followers?|top_?followers?)"\s*:\s*(\d+)', blob)
-                if m:
-                    result["smarts"] = int(m.group(1))
 
         # Header data (clean labels on Sorsa)
         m = re.search(r"Followers:\s*([\d.,]+\s*[KkMmBb]?)", text)
@@ -220,9 +235,10 @@ async def scrape_sorsa(context, username: str) -> dict:
         if m:
             result["tier"] = f"{m.group(1)}. {m.group(2)}"
 
-        # Smart followers: "Top followers by score tiers" big number, else "TOP followers N"
+        # Smart/Top followers: "Top followers by score tiers" big number,
+        # else "TOP followers N"
         if result["smarts"] is None:
-            m = re.search(r"score\s*tiers[\s\S]{0,30}?(\d{2,6})", text, re.I)
+            m = re.search(r"score\s*tiers[\s\S]{0,50}?(\d{2,6})", text, re.I)
             if not m:
                 m = re.search(r"TOP\s*followers\s+(\d{2,6})", text, re.I)
             if m:

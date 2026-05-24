@@ -74,8 +74,9 @@ def build_message(username: str, data: dict) -> str:
     lines = [
         f"📊 <b>Analysing @{u}</b>",
         now,
-        f"👥 <b>Followers:</b> {html.escape(str(followers))}  |  <b>Following:</b> {html.escape(str(following))}",
-        f"🤝 <b>Joined:</b> {html.escape(str(joined))}  |  <b>Total Posts:</b> {html.escape(str(posts))}",
+        "",
+        f"👥 <b>Followers:</b> {html.escape(str(followers))}  | 👥 <b>Following:</b> {html.escape(str(following))}",
+        f"🤝 <b>Joined:</b> {html.escape(str(joined))}  | 📄 <b>Total Posts:</b> {html.escape(str(posts))}",
         DIVIDER,
     ]
 
@@ -92,7 +93,7 @@ def build_message(username: str, data: dict) -> str:
     lines += [
         f"🟣 <b>Sorsa Score:</b> {_val(sorsa.get('score'))}",
         f"📈 <b>Tier:</b> {html.escape(str(_val(sorsa.get('tier'))))}",
-        f"🧠 <b>Smart Followers:</b> {_val(sorsa.get('smarts'))}",
+        f"🧠 <b>Top Followers:</b> {_val(sorsa.get('smarts'))}",
         _link("View on Sorsa", sorsa.get("url", "https://app.sorsa.io/")),
         DIVIDER,
     ]
