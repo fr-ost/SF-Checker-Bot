@@ -262,20 +262,23 @@ async def scrape_twitterscore(context, username: str) -> dict:
     api = []
     page.on("response", _make_capture(api, ["score", "profile", "twitter", "user", "smart", "follow", "rank"]))
     try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=40_000)
-        # TwitterScore is slow — wait until the gauge score number appears
+        await page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+        # TwitterScore is the slowest site. Wait until the gauge actually
+        # populates: detected by a status word OR a decimal score appearing.
         try:
             await page.wait_for_function(
                 """() => {
                     const t = document.body.innerText;
-                    const m = t.match(/Twitter Score[\\s\\S]{0,60}?(\\d+(?:\\.\\d+)?)/i);
-                    return m && parseFloat(m[1]) > 0;
+                    if (/\\b(Excellent|Very High|High|Above Average|Good|Normal|Average|Below Average|Low|Very Low|Poor|Weak|Strong|Bad)\\b/i.test(t)) return true;
+                    if (/\\b\\d{1,4}\\.\\d\\b/.test(t)) return true;  // decimal gauge score e.g. 40.3
+                    return false;
                 }""",
-                timeout=25_000,
+                timeout=30_000,
             )
         except Exception:
             pass
-        await page.wait_for_timeout(3500)
+        # extra settle for the score counter animation + smart-followers count
+        await page.wait_for_timeout(5000)
         text = await page.inner_text("body")
 
         for payload in api:
@@ -293,17 +296,33 @@ async def scrape_twitterscore(context, username: str) -> dict:
                 if m:
                     result["smarts"] = int(m.group(1))
 
-        # Gauge: status word + score number, anchored to the "Twitter Score" label
+        STATUS_WORDS = (
+            r"Excellent|Very High|High|Above Average|Good|Normal|Average|"
+            r"Below Average|Low|Very Low|Poor|Weak|Strong|Bad"
+        )
+
+        # Primary: a status word immediately followed by the gauge score
         if result["score"] is None or result["status"] is None:
-            m = re.search(
-                r"Twitter Score[\s\S]{0,60}?([A-Z][a-zA-Z]*(?:\s[A-Z][a-zA-Z]*)?)\s+(\d{1,4}(?:\.\d+)?)",
-                text,
-            )
+            m = re.search(rf"\b({STATUS_WORDS})\b\s*\n?\s*(\d{{1,4}}(?:\.\d+)?)", text, re.I)
             if m:
                 if result["status"] is None:
-                    result["status"] = m.group(1).strip()
+                    result["status"] = m.group(1).title()
                 if result["score"] is None:
                     result["score"] = float(m.group(2))
+
+        # Fallback status: any of the known words anywhere
+        if result["status"] is None:
+            m = re.search(rf"\b({STATUS_WORDS})\b", text, re.I)
+            if m:
+                result["status"] = m.group(1).title()
+
+        # Fallback score: first decimal score, else number near "Twitter Score"
+        if result["score"] is None:
+            m = re.search(r"\b(\d{1,4}\.\d)\b", text)
+            if not m:
+                m = re.search(r"Twitter Score[\s\S]{0,120}?(\d{1,4}(?:\.\d+)?)", text)
+            if m:
+                result["score"] = float(m.group(1))
 
         # Total smart followers: "Smart Followers – 430"
         if result["smarts"] is None:
@@ -327,15 +346,17 @@ async def scrape_twitterscore(context, username: str) -> dict:
 # ───────────────────────── Orchestrator ─────────────────────────
 
 async def scrape_all(username: str) -> dict:
-    """One browser, three tabs, scraped concurrently."""
+    """One browser; each site in its own isolated context, scraped concurrently."""
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=BROWSER_ARGS)
-        context = await browser.new_context(extra_http_headers=HEADERS)
+        ctx_gm = await browser.new_context(extra_http_headers=HEADERS)
+        ctx_so = await browser.new_context(extra_http_headers=HEADERS)
+        ctx_ts = await browser.new_context(extra_http_headers=HEADERS)
         try:
             gm, sorsa, ts = await asyncio.gather(
-                scrape_getmoni(context, username),
-                scrape_sorsa(context, username),
-                scrape_twitterscore(context, username),
+                scrape_getmoni(ctx_gm, username),
+                scrape_sorsa(ctx_so, username),
+                scrape_twitterscore(ctx_ts, username),
                 return_exceptions=True,
             )
         finally:
